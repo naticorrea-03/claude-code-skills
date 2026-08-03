@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Acme — Data-Flow Map</title>
+<style>
+  :root{
+    --bg:#0d0f14; --panel:#161a22; --panel2:#1d2230; --line:#2a3142;
+    --text:#e7ebf2; --dim:#8b93a7;
+    --green:#34d399; --amber:#fbbf24; --red:#f87171; --blue:#60a5fa; --purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0}
+  header .sub{color:var(--dim);font-size:12px}
+  .tabs{display:flex;gap:6px;margin-left:auto}
+  .tab{padding:7px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--dim);cursor:pointer;font-size:13px}
+  .tab.active{background:var(--panel2);color:var(--text);border-color:#3a4256}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;padding:10px 24px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .ln{width:20px;height:0;border-top:2px solid;display:inline-block}
+  .wrap{display:flex;height:calc(100vh - 132px)}
+  #mapView{flex:1;position:relative;overflow:auto}
+  svg{display:block}
+  .colhead{fill:var(--dim);font-size:12px;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+  .edge{fill:none;stroke-width:1.6;transition:opacity .12s}
+  .node{cursor:pointer}
+  .node rect{transition:opacity .12s}
+  .node text{pointer-events:none;font-size:12px;fill:var(--text)}
+  .dim{opacity:.08 !important}
+  #panel{width:360px;border-left:1px solid var(--line);background:var(--panel);padding:20px;overflow:auto}
+  #panel h2{margin:0 0 4px;font-size:16px}
+  #panel .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin:2px 4px 8px 0}
+  #panel .row{margin:10px 0;padding-top:10px;border-top:1px solid var(--line)}
+  #panel .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+  #panel .flag{background:#3a2417;border:1px solid #6b4423;color:#fbbf24;padding:8px 10px;border-radius:8px;margin-top:10px;font-size:12.5px}
+  #panel .empty{color:var(--dim);margin-top:40px;text-align:center}
+  #panel ul{margin:4px 0;padding-left:18px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
+  tr:hover td{background:var(--panel)}
+  .scroll{padding:18px 24px;overflow:auto;height:calc(100vh - 132px);width:100%}
+  .badge{font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600}
+  .changed li{margin:8px 0}.changed b{color:var(--green)}
+  .muted{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔀 Acme — Data-Flow Map</h1>
+  <span class="sub">Where data actually moves. Hover any node to isolate its flows. Verified against live state YYYY-MM-DD.</span>
+  <div class="tabs">
+    <div class="tab active" data-view="map">Flow Map</div>
+    <div class="tab" data-view="sched">Schedule</div>
+    <div class="tab" data-view="changed">Changed</div>
+  </div>
+</header>
+<div class="legend">
+  <span><i class="ln" style="border-color:var(--blue)"></i>reads (data in)</span>
+  <span><i class="ln" style="border-color:var(--green)"></i>writes (data out)</span>
+  <span><i class="ln" style="border-color:var(--red);border-top-style:dashed"></i>broken / stale flow</span>
+  <span><i class="dot" style="background:var(--green)"></i>scheduled + live</span>
+  <span><i class="dot" style="background:var(--amber)"></i>needs work</span>
+  <span><i class="dot" style="background:var(--red)"></i>off / dead</span>
+  <span><i class="dot" style="background:var(--purple)"></i>store</span>
+  <span><i class="dot" style="background:var(--blue)"></i>external / on-demand</span>
+</div>
+
+<div class="wrap" id="mapWrap">
+  <div id="mapView"><svg id="svg"></svg></div>
+  <div id="panel"><div class="empty">Hover a node to trace its data flows. Click for full detail.</div></div>
+</div>
+<div class="scroll" id="schedView" style="display:none"></div>
+<div class="scroll changed" id="changedView" style="display:none"></div>
+
+<script>
+const C={green:"#34d399",amber:"#fbbf24",red:"#f87171",blue:"#60a5fa",purple:"#a78bfa"};
+
+// ==== DATA START ====
+// Replace everything in this block with the audited system.
+// Node fields: id (unique), col (0 source | 1 agent | 2 store | 3 outbox),
+//   label, status (green|amber|red|blue|purple), sched (agents only),
+//   model (agents only), does (1-3 plain sentences), flag (warnings only, else "").
+// Edge fields: [fromId, toId, "read"|"write"|"stale"]. Every edge needs evidence.
+const COLS=["Sources (external + local)","Agents / routines","Stores (system of record)","To the human / outbox"];
+
+const NODES=[
+ // ---- col 0 sources (SAMPLE DATA) ----
+ {id:"email",col:0,label:"Email inbox",status:"blue",does:"Company inbox. Read by the daily digest and the reply drafter."},
+ {id:"crm",col:0,label:"CRM API",status:"blue",does:"Customer records. Read by the daily digest."},
+ {id:"forms",col:0,label:"Intake forms",status:"blue",does:"New-lead form submissions. Source for the lead router."},
+
+ // ---- col 1 agents (SAMPLE DATA) ----
+ {id:"digest",col:1,label:"daily-digest",status:"green",sched:"Weekday 8am local",model:"(model name)",
+  does:"Reads inbox + CRM once and posts one summary message: open loops, new leads, today's meetings.",flag:""},
+ {id:"drafter",col:1,label:"reply-drafter",status:"green",sched:"Hourly 9am-6pm",model:"(model name)",
+  does:"Drafts replies to unanswered client emails. Drafts only, never sends.",
+  flag:"Example flag: recently repointed to the new CRM fields (YYYY-MM-DD)."},
+ {id:"router",col:1,label:"lead-router",status:"amber",sched:"On form submit",model:"Webhook",
+  does:"Pushes each form submission into the leads table and pings the owner.",
+  flag:"Amber because the owner ping has been failing intermittently (a concrete needs-work reason). Also reported by the user, not verified against live state. Unverified alone would NOT make it amber; status follows the node's nature, the flag carries uncertainty."},
+
+ // ---- col 2 stores (SAMPLE DATA) ----
+ {id:"d-leads",col:2,label:"Leads table",status:"purple",does:"Canonical lead list. Written by the router, read by the digest.",flag:""},
+ {id:"d-log",col:2,label:"Activity log",status:"purple",does:"Every draft the agents created or skipped.",flag:""},
+
+ // ---- col 3 outbox (SAMPLE DATA) ----
+ {id:"o-chat",col:3,label:"Chat DM → you",status:"green",does:"Where routines report to the human."},
+ {id:"o-drafts",col:3,label:"Email drafts",status:"green",does:"Draft replies waiting for human review. Never auto-sent."},
+];
+
+const E=[
+ ["email","digest","read"],["crm","digest","read"],["d-leads","digest","read"],["digest","o-chat","write"],
+ ["email","drafter","read"],["drafter","o-drafts","write"],["drafter","d-log","write"],
+ ["forms","router","read"],["router","d-leads","write"],["router","o-chat","write"],
+];
+// ==== DATA END ====
+
+const SVG=document.getElementById("svg"), ns="http://www.w3.org/2000/svg";
+function el(t,a){const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+const idx={}; NODES.forEach(n=>idx[n.id]=n);
+const adj={}; NODES.forEach(n=>adj[n.id]=new Set());
+E.forEach(([f,t])=>{adj[f].add(t);adj[t].add(f);});
+
+function render(){
+  const view=document.getElementById("mapView");
+  const W=Math.max(view.clientWidth-4,1080);
+  SVG.innerHTML="";
+  const colX=[ W*0.11, W*0.37, W*0.66, W*0.92 ];
+  const rowGap=27, topPad=58;
+  const colNodes=[0,1,2,3].map(c=>NODES.filter(n=>n.col===c));
+  const maxRows=Math.max(...colNodes.map(a=>a.length));
+  const H=topPad+maxRows*rowGap+30;
+  SVG.setAttribute("width",W);SVG.setAttribute("height",H);SVG.setAttribute("viewBox",`0 0 ${W} ${H}`);
+
+  const defs=el("defs",{});
+  [["mk-read",C.blue],["mk-write",C.green],["mk-stale",C.red]].forEach(([id,col])=>{
+    const m=el("marker",{id,markerWidth:7,markerHeight:7,refX:6,refY:3,orient:"auto"});
+    m.appendChild(el("path",{d:"M0,0 L6,3 L0,6 Z",fill:col}));defs.appendChild(m);
+  });
+  SVG.appendChild(defs);
+
+  colNodes.forEach((arr,c)=>{
+    const colH=el("text",{x:colX[c],y:30,"text-anchor":"middle",class:"colhead"});colH.textContent=COLS[c];SVG.appendChild(colH);
+    const blockTop=topPad+(maxRows-arr.length)*rowGap/2;
+    arr.forEach((n,i)=>{ n._x=colX[c]; n._y=blockTop+i*rowGap; });
+  });
+
+  const ek={read:["#60a5fa","mk-read","0"],write:["#34d399","mk-write","0"],stale:["#f87171","mk-stale","4 3"]};
+  E.forEach(([f,t,k])=>{
+    const a=idx[f],b=idx[t];const mx=(a._x+b._x)/2;
+    const p=el("path",{d:`M${a._x},${a._y} C${mx},${a._y} ${mx},${b._y} ${b._x},${b._y}`,
+      class:"edge","data-f":f,"data-t":t,stroke:ek[k][0],"marker-end":`url(#${ek[k][1]})`,"stroke-dasharray":ek[k][2],opacity:.32});
+    SVG.appendChild(p);
+  });
+
+  NODES.forEach(n=>{
+    const g=el("g",{class:"node","data-id":n.id});
+    const w=Math.min(n.label.length*6.6+30, n.col===2?250:190);
+    const x0 = n.col===0 ? n._x-w : (n.col===3 ? n._x : n._x-w/2);
+    g.appendChild(el("rect",{x:x0,y:n._y-11,width:w,height:22,rx:6,fill:"#1a2030",stroke:"#2f3850","data-id":n.id,opacity:1}));
+    g.appendChild(el("circle",{cx:x0+11,cy:n._y,r:5,fill:C[n.status]}));
+    const t=el("text",{x:x0+22,y:n._y+4});t.textContent=n.label;g.appendChild(t);
+    g.onmouseenter=()=>hover(n.id); g.onmouseleave=()=>unhover(); g.onclick=()=>showPanel(n);
+    SVG.appendChild(g);
+  });
+}
+
+function hover(id){
+  const keep=new Set([id,...adj[id]]);
+  SVG.querySelectorAll(".edge").forEach(p=>{
+    const on=p.dataset.f===id||p.dataset.t===id;
+    p.classList.toggle("dim",!on); if(on)p.setAttribute("opacity",".95");else p.setAttribute("opacity",".32");
+  });
+  SVG.querySelectorAll(".node").forEach(g=>g.classList.toggle("dim",!keep.has(g.dataset.id)));
+}
+function unhover(){
+  SVG.querySelectorAll(".edge").forEach(p=>{p.classList.remove("dim");p.setAttribute("opacity",".32");});
+  SVG.querySelectorAll(".node").forEach(g=>g.classList.remove("dim"));
+}
+
+function showPanel(n){
+  const pc={green:"Live & healthy",amber:"Needs work",red:"Off / dead",blue:"External / on-demand",purple:"Data store"};
+  const ins=E.filter(e=>e[1]===n.id), outs=E.filter(e=>e[0]===n.id);
+  const nm=id=>idx[id]?idx[id].label:id;
+  let flows="";
+  if(ins.length) flows+=`<div class="row"><div class="k">Data in</div><ul>${ins.map(e=>`<li>${nm(e[0])} <span class="muted">(${e[2]})</span></li>`).join("")}</ul></div>`;
+  if(outs.length) flows+=`<div class="row"><div class="k">Data out</div><ul>${outs.map(e=>`<li>${nm(e[1])} <span class="muted">(${e[2]})</span></li>`).join("")}</ul></div>`;
+  document.getElementById("panel").innerHTML=`
+    <h2>${n.label}</h2>
+    <span class="pill" style="background:${C[n.status]}22;color:${C[n.status]};border:1px solid ${C[n.status]}55">${pc[n.status]}</span>
+    ${n.sched?`<div class="row"><div class="k">Schedule</div>${n.sched}${n.model?` &middot; <span class="muted">${n.model}</span>`:""}</div>`:""}
+    <div class="row"><div class="k">What it is</div>${n.does||""}</div>
+    ${flows}
+    ${n.flag?`<div class="flag">⚑ ${n.flag}</div>`:""}`;
+}
+
+document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));t.classList.add("active");
+  const v=t.dataset.view;
+  document.getElementById("mapWrap").style.display=v==="map"?"flex":"none";
+  document.getElementById("schedView").style.display=v==="sched"?"block":"none";
+  document.getElementById("changedView").style.display=v==="changed"?"block":"none";
+  if(v==="map")render();
+};});
+
+function buildSched(){
+  const order=["green","amber","red","blue"];
+  const rows=NODES.filter(n=>n.col===1).sort((a,b)=>order.indexOf(a.status)-order.indexOf(b.status));
+  const pc={green:["Live",C.green],amber:["Needs work",C.amber],red:["Off",C.red],blue:["On-demand / native",C.blue]};
+  let html=`<h2 style="margin-top:0">When every routine runs</h2><table><thead><tr><th>Routine</th><th>Schedule</th><th>Status</th></tr></thead><tbody>`;
+  rows.forEach(n=>{html+=`<tr><td><b>${n.label}</b></td><td>${n.sched||""}</td><td><span class="badge" style="background:${pc[n.status][1]}22;color:${pc[n.status][1]}">${pc[n.status][0]}</span></td></tr>`;});
+  document.getElementById("schedView").innerHTML=html+"</tbody></table>";
+}
+
+// Replace this block too: what changed recently, what carried over, what was retired (with dates).
+document.getElementById("changedView").innerHTML=`
+  <h2 style="margin-top:0">Changed (SAMPLE)</h2>
+  <ul>
+    <li><b>Example entry.</b> The reply-drafter was repointed to the new CRM fields on YYYY-MM-DD.</li>
+  </ul>
+  <h2>Retired</h2>
+  <ul>
+    <li class="muted">Example: the old weekly-report cron was disabled YYYY-MM-DD, merged into daily-digest.</li>
+  </ul>`;
+
+buildSched();render();
+let rt;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(document.getElementById("mapWrap").style.display!=="none")render();},150);});
+</script>
+</body>
+</html>
