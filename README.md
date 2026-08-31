@@ -30,7 +30,7 @@ Most "prompt tips" lists go stale the moment a new model ships. These skills enc
 
 ## Looking for build recipes?
 
-These are skills you install and invoke. If you instead want prompts you paste once to *build* something (a tool, an automation, a custom skill), see the companion repo: [claude-code-recipes](https://github.com/nataliacorrea03/claude-code-recipes).
+These are skills you install and invoke. If you instead want prompts you paste once to *build* something (a tool, an automation, a custom skill), see the companion repo: [claude-code-recipes](https://github.com/naticorrea-03/claude-code-recipes).
 
 ## Install
 
@@ -38,7 +38,7 @@ A skill is a folder. Installing one is copying that folder into your skills dire
 
 **For all your projects (user-level):**
 ```bash
-git clone https://github.com/nataliacorrea03/claude-code-skills.git
+git clone https://github.com/naticorrea-03/claude-code-skills.git
 mkdir -p ~/.claude/skills
 cp -r claude-code-skills/skills/* ~/.claude/skills/
 ```
@@ -75,4 +75,4 @@ MIT. Use them, fork them, adapt them. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built and maintained by [Natalia Correa](https://github.com/nataliacorrea03). The `working-with-claude` skill is a distillation of the publicly available [Anthropic Academy](https://www.anthropic.com/learn) courses.
+Built and maintained by [Natalia Correa](https://github.com/naticorrea-03). The `working-with-claude` skill is a distillation of the publicly available [Anthropic Academy](https://www.anthropic.com/learn) courses.
